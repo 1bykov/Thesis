@@ -86,6 +86,12 @@ df_daily = df_daily.dropna()
 results = []
 parameter_combinations = list(itertools.product(data_days_list, indicator_days_list, vol_coeff_list, targets))
 
+# =============================================================================================================
+# ITERATION LOOP
+# =============================================================================================================
+results = []
+parameter_combinations = list(itertools.product(data_days_list, indicator_days_list, vol_coeff_list, targets))
+
 for data_days, indicator_days, vol_coeff, target in parameter_combinations:
     frequency = f'{data_days}D'
     indicator_window = round(indicator_days / data_days)
@@ -101,16 +107,18 @@ for data_days, indicator_days, vol_coeff, target in parameter_combinations:
     df['excess_R_util'] = df['R_util_debt'] - df['R_govt']
     df = df.dropna()
     
-    mu_p_6m_brent = df['CO1_Comdty'].rolling(window=indicator_window).mean()
-    std_p_6m_brent = df['CO1_Comdty'].rolling(window=indicator_window).std()
+    # Corrected: Rolling calculations apply to log-returns
+    mu_p_6m_brent = df['R_brent'].rolling(window=indicator_window).mean()
+    std_p_6m_brent = df['R_brent'].rolling(window=indicator_window).std()
     threshold_brent = mu_p_6m_brent + vol_coeff * std_p_6m_brent
     
-    mu_p_6m_ttf = df['TTF_front_month'].rolling(window=indicator_window).mean()
-    std_p_6m_ttf = df['TTF_front_month'].rolling(window=indicator_window).std()
+    mu_p_6m_ttf = df['R_ttf'].rolling(window=indicator_window).mean()
+    std_p_6m_ttf = df['R_ttf'].rolling(window=indicator_window).std()
     threshold_ttf = mu_p_6m_ttf + vol_coeff * std_p_6m_ttf
     
-    df['D_brent'] = np.where(df['CO1_Comdty'] > threshold_brent, 1, 0)
-    df['D_ttf'] = np.where(df['TTF_front_month'] > threshold_ttf, 1, 0)
+    # Corrected: Binary indicators test log-returns against the threshold
+    df['D_brent'] = np.where(df['R_brent'] > threshold_brent, 1, 0)
+    df['D_ttf'] = np.where(df['R_ttf'] > threshold_ttf, 1, 0)
     
     df = df.dropna()
     
@@ -124,35 +132,27 @@ for data_days, indicator_days, vol_coeff, target in parameter_combinations:
     
     params_dict = {'data_days': data_days, 'indicator_days': indicator_days, 'vol_coeff': vol_coeff}
 
-    max_lags = int(np.floor(4*(len(df)/100)**(2/9))) # - Schwert (1989) rule for maximum lags in Newey-West estimator
+    max_lags = int(np.floor(4*(len(df)/100)**(2/9)))
     
     try:
         # Unconditional Brent
         X_unc_brent = sm.add_constant(df[['R_govt', 'R_brent', 'R_util_eqty']])
-        unc_brent = sm.OLS(df[target], X_unc_brent).fit(cov_type='HAC',
-              cov_kwds={'maxlags': max_lags}
-        )
+        unc_brent = sm.OLS(df[target], X_unc_brent).fit(cov_type='HAC', cov_kwds={'maxlags': max_lags})
         results.append(extract_regression_metrics(unc_brent, X_unc_brent, 'Unconditional Brent', target, params_dict, 'R_brent'))
         
         # Conditional Brent
         X_con_brent = sm.add_constant(df[['R_govt', 'govt_indic_brent', 'R_brent', 'brent_indic_brent', 'D_brent', 'R_util_eqty', 'eqty_indic_brent']])
-        con_brent = sm.OLS(df[target], X_con_brent).fit(cov_type='HAC',
-              cov_kwds={'maxlags': max_lags}
-        )
+        con_brent = sm.OLS(df[target], X_con_brent).fit(cov_type='HAC', cov_kwds={'maxlags': max_lags})
         results.append(extract_regression_metrics(con_brent, X_con_brent, 'Conditional Brent', target, params_dict, 'brent_indic_brent'))
         
         # Unconditional TTF
         X_unc_ttf = sm.add_constant(df[['R_govt', 'R_ttf', 'R_util_eqty']])
-        unc_ttf = sm.OLS(df[target], X_unc_ttf).fit(cov_type='HAC',
-              cov_kwds={'maxlags': max_lags}
-        )
+        unc_ttf = sm.OLS(df[target], X_unc_ttf).fit(cov_type='HAC', cov_kwds={'maxlags': max_lags})
         results.append(extract_regression_metrics(unc_ttf, X_unc_ttf, 'Unconditional TTF', target, params_dict, 'R_ttf'))
         
         # Conditional TTF
         X_con_ttf = sm.add_constant(df[['R_govt', 'govt_indic_ttf', 'R_ttf', 'ttf_indic_ttf', 'D_ttf', 'R_util_eqty', 'eqty_indic_ttf']])
-        con_ttf = sm.OLS(df[target], X_con_ttf).fit(cov_type='HAC',
-              cov_kwds={'maxlags': max_lags}
-        )
+        con_ttf = sm.OLS(df[target], X_con_ttf).fit(cov_type='HAC', cov_kwds={'maxlags': max_lags})
         results.append(extract_regression_metrics(con_ttf, X_con_ttf, 'Conditional TTF', target, params_dict, 'ttf_indic_ttf'))
         
     except ValueError:
